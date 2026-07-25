@@ -52,19 +52,32 @@ for repo in repos:
 gql = graphql(
     """query($login:String!){ user(login:$login){
         contributionsCollection { contributionCalendar { totalContributions
-          weeks { contributionDays { date contributionCount weekday } } } } } }""",
+          weeks { contributionDays { date contributionCount weekday color } } } } } }""",
     {"login": USERNAME},
 )
 cal = gql["data"]["user"]["contributionsCollection"]["contributionCalendar"]
 total_contributions = cal["totalContributions"]
 
+# GitHub buckets each day's shade RELATIVE to this user's own distribution (not
+# fixed count thresholds) — so derive levels from GitHub's own per-day `color`
+# field, ranked by the average count each color represents, rather than
+# guessing absolute cutoffs. This reproduces the real profile's shading exactly.
+raw_days = [(day["date"], day["contributionCount"], day["weekday"], col, day["color"])
+            for col, week in enumerate(cal["weeks"]) for day in week["contributionDays"]]
+
+color_counts = {}
+for _, cnt, _, _, color in raw_days:
+    color_counts.setdefault(color, []).append(cnt)
+zero_colors = {c for c, counts in color_counts.items() if max(counts) == 0}
+nonzero_sorted = sorted((c for c in color_counts if c not in zero_colors),
+                         key=lambda c: sum(color_counts[c]) / len(color_counts[c]))
+color_level = {c: 0 for c in zero_colors}
+color_level.update({c: min(i + 1, 4) for i, c in enumerate(nonzero_sorted)})
+
 grid = []
-for col, week in enumerate(cal["weeks"]):
-    for day in week["contributionDays"]:
-        cnt = day["contributionCount"]
-        level = 0 if cnt == 0 else 1 if cnt < 4 else 2 if cnt < 8 else 3 if cnt < 14 else 4
-        grid.append({"date": day["date"], "count": cnt, "level": level,
-                     "row": day["weekday"], "col": col})
+for date, cnt, weekday, col, color in raw_days:
+    grid.append({"date": date, "count": cnt, "level": color_level.get(color, 0),
+                 "row": weekday, "col": col})
 
 days_sorted = sorted(grid, key=lambda d: d["date"])
 best_streak = cur = 0
